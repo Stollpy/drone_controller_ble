@@ -25,5 +25,6 @@
 #define MOTOR_STATE_STOP 0x00
 
 void ble_init();
+bool ble_is_connected();
 
 #endif

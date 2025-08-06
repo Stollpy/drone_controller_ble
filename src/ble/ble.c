@@ -3,6 +3,7 @@
 static char remote_device_name[ESP_BLE_ADV_DATA_LEN_MAX] = "stollpy_drone";
 static bool connect    = false;
 static bool get_server = false;
+static bool is_connected = false;
 static esp_gattc_char_elem_t *char_elem_result   = NULL;
 // static esp_gattc_descr_elem_t *descr_elem_result = NULL;
 
@@ -58,14 +59,25 @@ static void gattc_motor_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
         }
         break;
     case ESP_GATTC_CONNECT_EVT:{
-        ESP_LOGI(GATTC_TAG, "Connected, conn_id %d, remote "ESP_BD_ADDR_STR"", p_data->connect.conn_id,
-                 ESP_BD_ADDR_HEX(p_data->connect.remote_bda));
+        ESP_LOGI(GATTC_TAG, "Connected, conn_id %d, remote "ESP_BD_ADDR_STR"", p_data->connect.conn_id, ESP_BD_ADDR_HEX(p_data->connect.remote_bda));
         gl_app_tab[APP_MOTOR_ID].conn_id = p_data->connect.conn_id;
         memcpy(gl_app_tab[APP_MOTOR_ID].remote_bda, p_data->connect.remote_bda, sizeof(esp_bd_addr_t));
         esp_err_t mtu_ret = esp_ble_gattc_send_mtu_req(gattc_if, p_data->connect.conn_id);
         if (mtu_ret){
             ESP_LOGE(GATTC_TAG, "Config MTU error, error code = %x", mtu_ret);
         }
+
+        is_connected = true;
+        
+        event_t ble_connected_event = {
+            .type = EVENT_BLE_CONNECTED,
+            .data = {
+                .ble_state = {
+                    .state = BLE_STATE_CONNECTED
+                }
+            }
+        };
+        event_bus_publish(&ble_connected_event);
         break;
     }
     case ESP_GATTC_OPEN_EVT:
@@ -157,6 +169,32 @@ static void gattc_motor_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
             }
         }
          break;
+    case ESP_GATTC_DISCONNECT_EVT:
+        ESP_LOGI(GATTC_TAG, "Disconnected, reason = 0x%x", p_data->disconnect.reason);
+        
+        // Reset connection flags
+        connect = false;
+        get_server = false;
+        is_connected = false;
+        
+        // Publish disconnection event
+        event_t ble_disconnected_event = {
+            .type = EVENT_BLE_DISCONNECTED,
+            .data = {
+                .ble_state = {
+                    .state = BLE_STATE_DISCONNECTED
+                }
+            }
+        };
+        event_bus_publish(&ble_disconnected_event);
+        
+        // ESP_LOGI(GATTC_TAG, "Starting reconnection scan...");
+        // // Restart scanning for reconnection
+        // esp_err_t scan_ret = esp_ble_gap_set_scan_params(&ble_scan_params);
+        // if (scan_ret){
+        //     ESP_LOGE(GATTC_TAG, "restart scan params error, error code = %x", scan_ret);
+        // }
+        break;
     case ESP_GATTC_REG_FOR_NOTIFY_EVT:
         break;
     case ESP_GATTC_NOTIFY_EVT:
@@ -279,8 +317,33 @@ static void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp
 
 void ble_motor_command_handler(event_t *event) {
     ESP_LOGI(GATTC_TAG, "Motor command received: %d", event->data.motors_command.type);
+    
+    if (!is_connected) {
+        ESP_LOGW(GATTC_TAG, "Cannot send motor command: BLE not connected");
+        return;
+    }
+    
     uint8_t value = event->data.motors_command.type;
-    esp_ble_gattc_write_char(gl_app_tab[APP_MOTOR_ID].gattc_if, gl_app_tab[APP_MOTOR_ID].conn_id, gl_app_tab[APP_MOTOR_ID].char_handle, sizeof(value), &value, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+    esp_err_t ret = esp_ble_gattc_write_char(
+        gl_app_tab[APP_MOTOR_ID].gattc_if, 
+        gl_app_tab[APP_MOTOR_ID].conn_id, 
+        gl_app_tab[APP_MOTOR_ID].char_handle, 
+        sizeof(value), 
+        &value, 
+        ESP_GATT_WRITE_TYPE_RSP, 
+        ESP_GATT_AUTH_REQ_NONE
+    );
+    
+    if (ret != ESP_OK) {
+        ESP_LOGE(GATTC_TAG, "Failed to send motor command, error: %x", ret);
+    } else {
+        ESP_LOGI(GATTC_TAG, "Motor command sent successfully: %s", 
+                 value == MOTOR_STATE_START ? "START" : "STOP");
+    }
+}
+
+bool ble_is_connected() {
+    return is_connected;
 }
 
 void ble_init() {
