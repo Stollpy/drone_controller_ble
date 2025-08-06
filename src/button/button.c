@@ -43,12 +43,16 @@ void button_start_motor_handler()
 
 void button_start_motor_init() 
 {
+    ESP_LOGI(BUTTON_START_TAG, "Initializing button on GPIO %d", BUTTON_ON_PIN);
+    
     // CONFIG ON BUTTON
     gpio_set_direction(BUTTON_ON_PIN, GPIO_MODE_INPUT);
     gpio_set_pull_mode(BUTTON_ON_PIN, GPIO_PULLUP_ONLY);
     gpio_set_intr_type(BUTTON_ON_PIN, GPIO_INTR_NEGEDGE);
     gpio_install_isr_service(0);
     gpio_isr_handler_add(BUTTON_ON_PIN, button_on_isr_handler, NULL);
+    
+    ESP_LOGI(BUTTON_START_TAG, "Button initialization complete");
 
     xTaskCreate(
         button_start_motor_handler,
